@@ -10,9 +10,9 @@
 	"author": "Robin Jacobs",
 	"license": "ISC",
 	"dependencies": {
+		"amqplib": "^0.5.6",
 		"bluebird": "^3.7.2",
 		"redis": "^3.0.2",
-		"sqs": "^2.0.2",
 		"uuid": "^8.2.0",
 		"ws": "^7.3.0"
 	}

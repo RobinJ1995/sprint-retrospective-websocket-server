@@ -1,33 +1,42 @@
-const SQS = require('sqs');
+const Amqplib = require('amqplib');
 const Promise = require('bluebird');
 
+const tryParseJson = data => {
+	try {
+		return JSON.parse(data);
+	} catch {
+		return data;
+	}
+}
+
 module.exports = class MessageQueue {
-	constructor(sqsConfig) {
-		this.sqsClient = new SQS({
-			access: sqsConfig.access_key_id,
-			secret: sqsConfig.secret_access_key,
-			proxy: sqsConfig.endpoint
-		});
-		this.queue = sqsConfig.queue;
+	constructor(url, queueName) {
+		this.client = Amqplib.connect(url)
+		this.queue = queueName;
 	}
 
-	send = message => new Promise((resolve, reject) => {
-		try {
-			console.log(`MQ <<<<< ${message}`);
-			this.sqsClient.push(this.queue, message, resolve);
-		} catch (ex) {
-			return reject(ex);
-		}
-	});
+	send = message => {
+		return this.client.then(connection => connection.createChannel())
+			.then(ch => ch.assertExchange(this.queue, 'fanout', {durable: false})
+				.then(() => ch))
+			.then(ch => ch.publish(
+				this.queue, '', Buffer.from(JSON.stringify(message))))
+			.then(() => console.log(`<<<<< ${JSON.stringify(message)}`))
+			.catch(err => console.error(`Failed to send message ${JSON.stringify(message)}`, err));
+	}
 
-	onReceive = callback => this.sqsClient.pull(this.queue,
-		(message, acknowledge) => {
-			const strMessage = JSON.stringify(message);
-			console.log(`MQ >>>>> ${strMessage}`);
+	onReceive = callback => this.client.then(connection => connection.createChannel())
+		.then(ch => ch.assertExchange(this.queue, 'fanout', {durable: false})
+			.then(() => ch))
+		.then(ch => ch.assertQueue('', {exclusive: true})
+			.then(q => ch.bindQueue(q.queue, this.queue, '')
+				.then(() => [ch, q])))
+		.then(([ch, q]) => ch.consume(q.queue, message => {
+			const messageContent = message.content.toString();
+			console.log(`>>>>> ${messageContent}`);
 
-			return Promise.resolve(callback(message))
-				.then(() => acknowledge())
-				.then(() => console.log(`MQ >ACK> ${strMessage}`))
-				.catch(console.error);
-		});
+			return Promise.resolve(callback(tryParseJson(messageContent)))
+				.then(() => console.log(`>ACK> ${messageContent}`))
+		}, {noAck: true}))
+		.catch(console.error);
 }

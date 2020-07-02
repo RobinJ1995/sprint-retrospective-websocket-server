@@ -6,15 +6,11 @@ const MessageQueue = require('./MessageQueue');
 
 const PORT = process.env.PORT || 5433;
 const REDIS_URL = process.env.REDIS_URL;
-const SQS_CONFIG = {
-	access_key_id: process.env.SQS_ACCESS_KEY_ID || '*',
-	secret_access_key: process.env.SQS_SECRET_ACCESS_KEY || '*',
-	endpoint: process.env.SQS_ENDPOINT,
-	queue: process.env.SQS_QUEUE_NAME
-};
+const MQ_CONNECTION_URL = process.env.MQ_CONNECTION_URL || 'amqp://localhost';
+const MQ_QUEUE_NAME = process.env.MQ_QUEUE_NAME || 'updates';
 
 const redis = Redis.createClient(REDIS_URL);
-const mq = new MessageQueue(SQS_CONFIG);
+const mq = new MessageQueue(MQ_CONNECTION_URL, MQ_QUEUE_NAME);
 
 const server = new WebSocket.Server({port: PORT});
 
