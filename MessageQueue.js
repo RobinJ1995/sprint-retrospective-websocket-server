@@ -19,8 +19,10 @@ module.exports = class MessageQueue {
 		return this.client.then(connection => connection.createChannel())
 			.then(ch => ch.assertExchange(this.queue, 'fanout', {durable: false})
 				.then(() => ch))
-			.then(ch => ch.publish(
-				this.queue, '', Buffer.from(JSON.stringify(message))))
+			.then(ch => {
+				ch.publish(this.queue, '', Buffer.from(JSON.stringify(message)));
+				ch.close();
+			})
 			.then(() => console.log(`<<<<< ${JSON.stringify(message)}`))
 			.catch(err => console.error(`Failed to send message ${JSON.stringify(message)}`, err));
 	}
