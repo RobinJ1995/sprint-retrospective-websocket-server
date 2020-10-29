@@ -1,3 +1,4 @@
+const Os = require('os');
 const WebSocket = require('ws');
 const Promise = require('bluebird');
 const Redis = Promise.promisifyAll(require('redis'));
@@ -19,14 +20,25 @@ const wsSend = (socket, msg) => {
 	console.log(`${socket.id} << ${msg}`);
 }
 
+const wsTrySend = (socket, msg) => {
+	try {
+		wsSend(socket, msg);
+	} catch {
+		// Don't care.
+	}
+}
+
 const wsHandle = (socket, message) => {
 	console.log(`${socket.id} >> ${message}`);
 
 	if (message.toLowerCase().startsWith('ping ')) {
 		const pong = message.replace(/^PING\s+/i, '').replace(/\n/, '');
 		wsSend(socket, `PONG ${pong}`);
+	} else if (message.toLowerCase().startsWith('pong ')) {
+		const ping = message.replace(/^PONG\s+/i, '').replace(/\n/, '');
+		ackPing(socket, ping);
 	} else if (message.toLowerCase() === 'disconnect') {
-		wsSend(socket, 'Goodbye.');
+		wsSend(socket, '# Goodbye.');
 		socket.close();
 	} else if (message.toLowerCase() === 'id') {
 		wsSend(socket, socket.id);
@@ -51,7 +63,9 @@ server.on('connection', (socket, req) => {
 		.then(data => console.log(`Client ${socket.id} connected with token "${token}".`, data) || data)
 		.then(({ retro }) => {
 			socket.retro = retro;
+			socket.ping = null;
 			wsSend(socket, '👋');
+			wsSend(socket, `# Connected to ${Os.hostname()}`);
 		}).then(() =>
 			socket.on('message', message => wsHandle(socket, message)))
 		.catch(ex => {
@@ -60,3 +74,43 @@ server.on('connection', (socket, req) => {
 			socket.close();
 		});
 });
+
+const terminateBrokenConnections = () => {
+	// Ping sent
+	[...server.clients].filter(({ ping }) => !!ping)
+		// Ping not acknowledged
+		.filter(({ ping: {ack}}) => !ack)
+		// Terminate connection
+		.forEach(brokenSocket => {
+			console.warn(`Ping timeout. Closing connection for socket ${brokenSocket.id}.`);
+			wsTrySend(brokenSocket, '# Ping timeout. Goodbye.');
+			brokenSocket.terminate();
+		});
+}
+
+const sendPings = () => {
+	[...server.clients].forEach(socket => {
+		const pingToken = uuid();
+		socket.ping = {
+			token: pingToken,
+			ack: false
+		};
+		wsSend(socket, `PING ${pingToken}`);
+	})
+}
+
+const ackPing = (socket, token) => {
+	const expectedToken = socket.ping?.token;
+
+	if (token !== expectedToken) {
+		wsSend(socket, '# Wrong token.');
+		return;
+	}
+
+	socket.ping.ack = true;
+};
+
+setInterval(() => {
+	terminateBrokenConnections();
+	sendPings();
+}, 10_000);
