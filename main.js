@@ -55,7 +55,7 @@ const getNumberOfRetroParticipants = retroId => redis.hlenAsync(`participants::$
 const broadcastToRetro = (retroId, message) =>
 	getSocketsForRetro(retroId).forEach(socket => wsTrySend(socket, message));
 const getAllActiveRetroIds = () =>
-	[...server.clients].map(({ retro }) => retro).reduce((acc, cur) => acc.add(cur), new Set());
+	[...[...server.clients].map(({ retro }) => retro).reduce((acc, cur) => acc.add(cur), new Set())];
 const broadcastRetroParticipants = (retroId = null) => {
 	if (retroId) {
 		return getNumberOfRetroParticipants(retroId)
@@ -152,7 +152,8 @@ const sendPings = () => {
 		const pingToken = uuid();
 		socket.ping = {
 			token: pingToken,
-			ack: false
+			ack: false,
+			sent: time()
 		};
 		wsSend(socket, `PING ${pingToken}`);
 	})
@@ -167,7 +168,10 @@ const ackPing = (socket, token) => {
 	}
 
 	socket.ping.ack = true;
+	const latencyMs = time() - socket.ping.sent;
+
 	updateParticipation(socket);
+	wsTrySend(socket, `LATENCY ${latencyMs}`);
 };
 
 setInterval(() => {
