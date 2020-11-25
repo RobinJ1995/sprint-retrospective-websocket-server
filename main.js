@@ -4,11 +4,13 @@ const Promise = require('bluebird');
 const Redis = Promise.promisifyAll(require('redis'));
 const { v4: uuid } = require('uuid');
 const MessageQueue = require('./MessageQueue');
+const { time } = require('./utils');
 
 const PORT = process.env.PORT || 5433;
 const REDIS_URL = process.env.REDIS_URL;
 const MQ_CONNECTION_URL = process.env.MQ_CONNECTION_URL || 'amqp://localhost';
 const MQ_QUEUE_NAME = process.env.MQ_QUEUE_NAME || 'updates';
+const SESSION_TIMEOUT_MS = process.env.SESSION_TIMEOUT_MS || 10_000;
 
 const redis = Redis.createClient(REDIS_URL);
 const mq = new MessageQueue(MQ_CONNECTION_URL, MQ_QUEUE_NAME);
@@ -49,18 +51,26 @@ const wsHandle = (socket, message) => {
 
 const getSocketsForRetro = retroId =>
 	[...server.clients].filter(({ retro }) => retro === retroId);
-const getNumberOfRetroParticipants = retroId => getSocketsForRetro(retroId).length;
+const getNumberOfRetroParticipants = retroId => redis.hlenAsync(`participants::${retroId}`);
 const broadcastToRetro = (retroId, message) =>
 	getSocketsForRetro(retroId).forEach(socket => wsTrySend(socket, message));
 const getAllActiveRetroIds = () =>
 	[...server.clients].map(({ retro }) => retro).reduce((acc, cur) => acc.add(cur), new Set());
 const broadcastRetroParticipants = (retroId = null) => {
 	if (retroId) {
-		broadcastToRetro(retroId, `PARTICIPANTS ${getNumberOfRetroParticipants(retroId)}`);
-		return;
+		return getNumberOfRetroParticipants(retroId)
+			.then(nParticipants => broadcastToRetro(retroId, `PARTICIPANTS ${nParticipants}`))
+			.catch(console.error);
 	}
 
-	getAllActiveRetroIds().forEach(retroId => broadcastRetroParticipants(retroId));
+	return Promise.all(getAllActiveRetroIds().map(retroId => broadcastRetroParticipants(retroId)));
+}
+const updateParticipation = ({ id, retro }) => {
+	const redisHashName = `participants::${retro}`;
+
+	return redis.hsetAsync(redisHashName, id, time())
+		.then(() => redis.pexpireAsync(redisHashName, SESSION_TIMEOUT_MS))
+		.catch(console.error);
 }
 
 const mqHandle = message => broadcastToRetro(message.retro, JSON.stringify(message));
@@ -77,8 +87,10 @@ server.on('connection', (socket, req) => {
 			socket.retro = retro;
 			socket.ping = null;
 			wsSend(socket, '👋');
-			wsSend(socket, `# Connected to ${Os.hostname()}`);
-			broadcastRetroParticipants(retro);
+			updateParticipation(socket)
+				.then(() => wsSend(socket, `# Connected to ${Os.hostname()}`))
+				.then(() => broadcastRetroParticipants(retro))
+				.catch(console.error);
 		}).then(() =>
 			socket.on('message', message => wsHandle(socket, message)))
 		.catch(ex => {
@@ -90,17 +102,50 @@ server.on('connection', (socket, req) => {
 
 const terminateBrokenConnections = () => {
 	// Ping sent
-	[...server.clients].filter(({ ping }) => !!ping)
+	return [...server.clients].filter(({ ping }) => !!ping)
 		// Ping not acknowledged
 		.filter(({ ping: {ack}}) => !ack)
 		// Terminate connection
-		.forEach(brokenSocket => {
+		.map(brokenSocket => {
 			console.warn(`Ping timeout. Closing connection for socket ${brokenSocket.id}.`);
+			removeParticipant(brokenSocket);
 			wsTrySend(brokenSocket, '# Ping timeout. Goodbye.');
 			brokenSocket.terminate();
-		});
-	broadcastRetroParticipants();
+		})
+		.some(x => x); // So that if the list contains at least 1 item, this returns true (to indicate modifications), otherwise false
+};
+const removeParticipant = ({ id, retro }) => {
+	console.log(`Removing participant ${id} to retro ${retro} from Redis.`);
+	return redis.hdelAsync(`participants::${retro}`, id)
+		.then(nModified => {
+			broadcastRetroParticipants(retro);
+
+			return nModified;
+		})
 }
+const purgeTimedoutParticipants = () => Promise.all(getAllActiveRetroIds()
+	.map(retroId => `participants::${retroId}`)
+	.map(redisHashName => redis.hgetallAsync(redisHashName)
+		.then(retroParticipants =>
+			Object.entries(retroParticipants)
+				.map(([ id, timestamp ]) => {
+					const timestampDiff = (timestamp + SESSION_TIMEOUT_MS) - time();
+					if (timestampDiff <= 0) {
+						console.log(`${redisHashName}->${id} expired ${timestampDiff}ms ago. Removing key from Redis.`);
+						return redis.hdelAsync(redisHashName, id); // returns number of keys deleted
+					}
+
+					return Promise.resolve(false);
+				}))))
+	.then(results => results.flapMap(x => x)
+		.reduce((acc, cur) => acc || cur, false))
+	.then(modified => {
+		if (modified) {
+			broadcastRetroParticipants();
+		}
+
+		return modified;
+	})
 
 const sendPings = () => {
 	[...server.clients].forEach(socket => {
@@ -122,9 +167,11 @@ const ackPing = (socket, token) => {
 	}
 
 	socket.ping.ack = true;
+	updateParticipation(socket);
 };
 
 setInterval(() => {
 	terminateBrokenConnections();
+	purgeTimedoutParticipants();
 	sendPings();
-}, 10_000);
+}, SESSION_TIMEOUT_MS);
