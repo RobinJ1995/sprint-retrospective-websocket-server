@@ -41,6 +41,7 @@ const wsHandle = (socket, message) => {
 		ackPing(socket, ping);
 	} else if (message.toLowerCase() === 'disconnect') {
 		wsSend(socket, '# Goodbye.');
+		removeParticipant(socket);
 		socket.close();
 	} else if (message.toLowerCase() === 'id') {
 		wsSend(socket, socket.id);
@@ -138,14 +139,7 @@ const purgeTimedoutParticipants = () => Promise.all(getAllActiveRetroIds()
 					return Promise.resolve(false);
 				}))))
 	.then(results => results.flatMap(x => x)
-		.reduce((acc, cur) => acc || cur, false))
-	.then(modified => {
-		if (modified) {
-			broadcastRetroParticipants();
-		}
-
-		return modified;
-	})
+		.reduce((acc, cur) => acc || cur, false));
 
 const sendPings = () => {
 	[...server.clients].forEach(socket => {
@@ -175,7 +169,9 @@ const ackPing = (socket, token) => {
 };
 
 setInterval(() => {
-	terminateBrokenConnections();
-	purgeTimedoutParticipants();
-	sendPings();
+	Promise.all([
+		terminateBrokenConnections(),
+		purgeTimedoutParticipants(),
+		sendPings()
+	]).then(() => broadcastRetroParticipants());
 }, SESSION_TIMEOUT_MS);
