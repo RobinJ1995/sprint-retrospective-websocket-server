@@ -137,7 +137,7 @@ const purgeTimedoutParticipants = () => Promise.all(getAllActiveRetroIds()
 
 					return Promise.resolve(false);
 				}))))
-	.then(results => results.flapMap(x => x)
+	.then(results => results.flatMap(x => x)
 		.reduce((acc, cur) => acc || cur, false))
 	.then(modified => {
 		if (modified) {
