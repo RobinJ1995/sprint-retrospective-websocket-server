@@ -47,11 +47,23 @@ const wsHandle = (socket, message) => {
 	}
 }
 
-const mqHandle = message => {
-	[...server.clients].filter(({ retro }) => retro === message.retro)
-		.forEach(socket => wsSend(socket, JSON.stringify(message)));
+const getSocketsForRetro = retroId =>
+	[...server.clients].filter(({ retro }) => retro === retroId);
+const getNumberOfRetroParticipants = retroId => getSocketsForRetro(retroId).length;
+const broadcastToRetro = (retroId, message) =>
+	getSocketsForRetro(retroId).forEach(socket => wsTrySend(socket, message));
+const getAllActiveRetroIds = () =>
+	[...server.clients].map(({ retro }) => retro).reduce((acc, cur) => acc.add(cur), new Set());
+const broadcastRetroParticipants = (retroId = null) => {
+	if (retroId) {
+		broadcastToRetro(retroId, `PARTICIPANTS ${getNumberOfRetroParticipants(retroId)}`);
+		return;
+	}
+
+	getAllActiveRetroIds().forEach(retroId => broadcastRetroParticipants(retroId));
 }
 
+const mqHandle = message => broadcastToRetro(message.retro, JSON.stringify(message));
 mq.onReceive(mqHandle);
 
 server.on('connection', (socket, req) => {
@@ -66,6 +78,7 @@ server.on('connection', (socket, req) => {
 			socket.ping = null;
 			wsSend(socket, '👋');
 			wsSend(socket, `# Connected to ${Os.hostname()}`);
+			broadcastRetroParticipants(retro);
 		}).then(() =>
 			socket.on('message', message => wsHandle(socket, message)))
 		.catch(ex => {
@@ -86,6 +99,7 @@ const terminateBrokenConnections = () => {
 			wsTrySend(brokenSocket, '# Ping timeout. Goodbye.');
 			brokenSocket.terminate();
 		});
+	broadcastRetroParticipants();
 }
 
 const sendPings = () => {
