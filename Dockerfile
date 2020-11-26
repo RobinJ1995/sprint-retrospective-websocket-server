@@ -1,13 +1,18 @@
-FROM node:14
+FROM node:14 AS build
 
+WORKDIR /src
+COPY package.json package-lock.json ./
+RUN npm ci
+COPY . ./
+RUN npm run build
+
+FROM node:14
 ENV NODE_ENV='production'
 
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm install
-
-COPY . .
+COPY --from=build /src/tsoutput/* ./
 
 EXPOSE 5433
-
-CMD ["npm", "start"]
+CMD ["npm", "run", "start:built"]
