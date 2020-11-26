@@ -10,7 +10,7 @@ const PORT = process.env.PORT || 5433;
 const REDIS_URL = process.env.REDIS_URL;
 const MQ_CONNECTION_URL = process.env.MQ_CONNECTION_URL || 'amqp://localhost';
 const MQ_QUEUE_NAME = process.env.MQ_QUEUE_NAME || 'updates';
-const SESSION_TIMEOUT_MS = process.env.SESSION_TIMEOUT_MS || 10_000;
+const SESSION_TIMEOUT_MS = parseInt(process.env.SESSION_TIMEOUT_MS || 10_000);
 
 const redis = Redis.createClient(REDIS_URL);
 const mq = new MessageQueue(MQ_CONNECTION_URL, MQ_QUEUE_NAME);
@@ -52,7 +52,13 @@ const wsHandle = (socket, message) => {
 
 const getSocketsForRetro = retroId =>
 	[...server.clients].filter(({ retro }) => retro === retroId);
-const getNumberOfRetroParticipants = retroId => redis.hlenAsync(`participants::${retroId}`);
+const getNumberOfRetroParticipants = retroId => redis.hgetallAsync(`participants::${retroId}`)
+	.then(Object.entries)
+	.then(x => x.length)
+	.catch(err => {
+		console.warn(`Failed to get participant count for retro ${retroId}`, err);
+		return 0;
+	})
 const broadcastToRetro = (retroId, message) =>
 	getSocketsForRetro(retroId).forEach(socket => wsTrySend(socket, message));
 const getAllActiveRetroIds = () =>
@@ -128,16 +134,17 @@ const purgeTimedoutParticipants = () => Promise.all(getAllActiveRetroIds()
 	.map(retroId => `participants::${retroId}`)
 	.map(redisHashName => redis.hgetallAsync(redisHashName)
 		.then(retroParticipants =>
-			Object.entries(retroParticipants)
+			!!retroParticipants && Object.entries(retroParticipants)
 				.map(([ id, timestamp ]) => {
-					const timestampDiff = (timestamp + SESSION_TIMEOUT_MS) - time();
+					const timestampDiff = (parseInt(timestamp) + SESSION_TIMEOUT_MS) - time();
 					if (timestampDiff <= 0) {
 						console.log(`${redisHashName}->${id} expired ${timestampDiff}ms ago. Removing key from Redis.`);
 						return redis.hdelAsync(redisHashName, id); // returns number of keys deleted
 					}
 
 					return Promise.resolve(false);
-				}))))
+				}))
+		.catch(console.error)))
 	.then(results => results.flatMap(x => x)
 		.reduce((acc, cur) => acc || cur, false));
 
@@ -169,9 +176,8 @@ const ackPing = (socket, token) => {
 };
 
 setInterval(() => {
-	Promise.all([
-		terminateBrokenConnections(),
-		purgeTimedoutParticipants(),
-		sendPings()
-	]).then(() => broadcastRetroParticipants());
+	terminateBrokenConnections();
+	sendPings();
+	purgeTimedoutParticipants()
+		.then(() => broadcastRetroParticipants());
 }, SESSION_TIMEOUT_MS);

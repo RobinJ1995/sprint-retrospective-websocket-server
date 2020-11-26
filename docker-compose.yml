@@ -58,6 +58,7 @@ services:
             MQ_QUEUE_NAME: 'updates'
             REDIS_URL: 'redis://redis'
             PORT: 5433
+            SESSION_TIMEOUT_MS: 5000
         depends_on:
             - message-queue
         restart: always
