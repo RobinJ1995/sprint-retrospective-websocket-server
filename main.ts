@@ -4,10 +4,13 @@ import WebSocket from 'ws';
 import Os from 'os';
 import { v4 as uuid } from 'uuid';
 import { time } from './utils';
+import randomItem from 'random-item';
 
 const PORT : number = parseInt(process.env.PORT || '5433');
 const PING_INTERVAL_MS = parseInt(process.env.PING_INTERVAL_MS || String(10_000));
 const SESSION_TIMEOUT_MS : number = parseInt(process.env.SESSION_TIMEOUT_MS || String(PING_INTERVAL_MS * 2));
+
+const AVATARS = ['🙎‍♂️', '🙍🏽‍♂️', '🙍🏼‍♀️', '🙎🏻‍♀️', '👩🏻‍🏭', '👨🏾‍🏭', '🤦‍♂️', '🤦‍♀️', '🙆‍♂️', '🙆🏻‍♀️', '👨‍🎨', '🧟‍♂️', '🧟‍♀️', '🧛‍♂️', '👨‍💻', '👩🏻‍💻', '👨‍💼', '👨🏽‍🍳', '👩🏾‍🍳', '👩🏻‍🍳', '👨🏻‍🔧', '👩🏽‍🔧', '👨‍🌾', '👨🏽‍🎓', '👩🏻‍🎓', '👨‍🚒', '🧖🏻‍♀️', '🧖🏿‍♀️', '🧖🏻‍♂️', '🧖🏾‍♂️', '🕵️‍♂️', '🕵🏻‍♀️', '🙋🏼‍♂️', '🙋🏼‍♀️', '🤹‍♂️', '🤹🏻‍♀️', '🧝🏽‍♂️', '🧝🏻‍♀️', '🤵🏼', '🦸🏻‍♀️', '🧑‍🔬', '🧑‍🎤', '👩‍🎤', '🧑‍🚀', '👩‍🚀', '💂‍♂️', '💂‍♀️', '🧛‍♀️'];
 
 import redis from './redis';
 import messageQueue from './message_queue';
@@ -54,6 +57,8 @@ const wsHandle = (socket : WebSocketExtended, message : string) => {
 	} else if (message.toLowerCase() === 'participants') {
 		getNumberOfRetroParticipants(socket.retro)
 			.then((nParticipants : number) => wsSend(socket, `PARTICIPANTS ${nParticipants}`));
+		getAvatarsForRetroParticipants(socket.retro)
+			.then((avatars : string[]) => wsSend(socket, `AVATARS ${avatars.join(',')}`));
 	}
 }
 
@@ -62,12 +67,21 @@ const getSocketsForRetro = (retroId : string) : WebSocketExtended[] =>
 	getClients().filter(({ retro } : WebSocketExtended) => retro === retroId);
 const getNumberOfRetroParticipants = (retroId : string) : Promise<number> =>
 	redis.hgetallAsync(`participants::${retroId}`)
-		.then(Object.entries)
+		.then(participantInfo => participantInfo ? Object.keys(participantInfo) : [])
+		.then(keys => keys.filter(k => !k.endsWith('::avatar')))
 		.then((x : any) => x.length)
 		.catch((err : Error) => {
 			console.warn(`Failed to get participant count for retro ${retroId}`, err);
 			return 0;
-		})
+		});
+const getAvatarsForRetroParticipants = (retroId : string) : Promise<string[]> =>
+	redis.hgetallAsync(`participants::${retroId}`)
+		.then(participantInfo => participantInfo ? Object.entries(participantInfo) : <([string, string])[]>{})
+		.then(entries => entries.filter(([k, v]) => k.endsWith('::avatar')).map(([k, v]) => v))
+		.catch((err : Error) => {
+			console.warn(`Failed to get participant avatars for retro ${retroId}`, err);
+			return [];
+		});
 const broadcastToRetro = (retroId: string, message : string) : void =>
 	getSocketsForRetro(retroId).forEach((socket : WebSocketExtended) => wsTrySend(socket, message));
 const getAllActiveRetroIds = () : string[] =>
@@ -76,24 +90,63 @@ const getAllActiveRetroIds = () : string[] =>
 		.reduce((acc : Set<string>, cur : string) => acc.add(cur), new Set<string>())];
 const broadcastRetroParticipants = (retroId? : string) : Promise<void> => {
 	if (retroId) {
-		return getNumberOfRetroParticipants(retroId)
-			.then(nParticipants => broadcastToRetro(retroId, `PARTICIPANTS ${nParticipants}`))
-			.catch(console.error);
+		return Promise.all([
+			getNumberOfRetroParticipants(retroId)
+				.then((nParticipants : number) => broadcastToRetro(retroId, `PARTICIPANTS ${nParticipants}`))
+				.catch(console.error),
+			getAvatarsForRetroParticipants(retroId)
+				.then((avatars : string[]) => broadcastToRetro(retroId, `AVATARS ${avatars.join(',')}`))
+				.catch(console.error)
+		]).then(() => {});
 	}
 
 	return Promise.all(getAllActiveRetroIds().map(
 		(retroId : string) => broadcastRetroParticipants(retroId)))
 		.then(() => {});
 }
-const updateParticipation = ({ id, retro } : WebSocketExtended) => {
+const updateParticipation = ({ id, retro, avatar } : WebSocketExtended) => {
 	const redisHashName : string = `participants::${retro}`;
 	const redisHashExpirationMs : number = SESSION_TIMEOUT_MS + Math.max(5_000, SESSION_TIMEOUT_MS);
 
 	return redis.hsetAsync(redisHashName, id, String(time()))
+		.then(() => redis.hsetAsync(redisHashName, `${id}::avatar`, avatar))
 		.then(() => console.debug(`Updated participation for user ${id} in retro ${retro}.`))
 		.then(() => redis.pexpireAsync(redisHashName, redisHashExpirationMs))
 		.then(() => console.debug(`Set retro participation hash ${redisHashName} to expire in ${redisHashExpirationMs}ms.`))
 		.catch(console.error);
+}
+const findAvailableAvatar = (retroId: string) : Promise<string> => {
+	const redisHashName : string = `participants::${retroId}`;
+	console.info(`Finding available avatar for retro ${retroId}...`);
+
+	return redis.hgetallAsync(redisHashName)
+		.then(participantInfo => participantInfo || {})
+		.then(participantInfo => {
+			const avatarsInUse = Object.entries(participantInfo)
+				.filter(([k, v]) => String(k).endsWith('::avatar'))
+				.map(([k, v]) => v);
+			if (avatarsInUse.length >= AVATARS.length) {
+				console.warn(`There are no more available avatar for retro ${retroId}: 🐣`);
+				return '🐣';
+			}
+
+			let avatar = null;
+			let attempts = 0;
+			while (avatar === null || avatarsInUse.includes(avatar)) {
+				if (attempts > 100) {
+					// Because I'm paranoid.
+					console.warn(`Could not find an available avatar for ${retroId} after ${attempts} attempts: 💩`);
+					return '💩';
+				}
+
+				avatar = randomItem(AVATARS);
+				attempts++;
+			}
+
+			console.info(`Found available avatar for retro ${retroId}: ${avatar}`);
+
+			return avatar;
+		});
 }
 
 const mqHandle = (message : any) => broadcastToRetro(message.retro, JSON.stringify(message));
@@ -113,13 +166,19 @@ server.on('connection', (socket : WebSocketExtended, req : IncomingMessage) => {
 			return JSON.parse(data);
 		})
 		.then((data : RedisAuthenticationEntity) : RedisAuthenticationEntity => {
-			console.log(`Client ${socket.id} connected with token "${token}".`, data);
+			console.info(`Client ${socket.id} connected with token "${token}".`, data);
 			return data;
 		})
 		.then(({ retro } : RedisAuthenticationEntity) => {
 			socket.retro = retro;
 			socket.lastPing = undefined;
 
+			return findAvailableAvatar(retro)
+				.then(avatar => {
+					socket.avatar = avatar;
+				});
+		})
+		.then(() => {
 			socket.on('close', () => {
 				console.info(`Client ${socket.id} disconnected.`);
 				removeParticipant(socket);
@@ -128,7 +187,7 @@ server.on('connection', (socket : WebSocketExtended, req : IncomingMessage) => {
 			wsSend(socket, '👋');
 			updateParticipation(socket)
 				.then(() => wsSend(socket, `# Connected to ${Os.hostname()}`))
-				.then(() => broadcastRetroParticipants(retro))
+				.then(() => broadcastRetroParticipants(socket.retro))
 				.catch(console.error);
 		}).then(() =>
 			socket.on('message', (message : string) => wsHandle(socket, message)))
@@ -155,7 +214,8 @@ const terminateBrokenConnections = () : boolean => {
 };
 const removeParticipant = ({ id, retro } : WebSocketExtended) : Promise<number> => {
 	console.log(`Removing participant ${id} to retro ${retro} from Redis.`);
-	return redis.hdelAsync(`participants::${retro}`, id)
+	return redis.hdelAsync(`participants::${retro}`, `${id}::avatar`)
+		.then(() => redis.hdelAsync(`participants::${retro}`, id))
 		.then((nModified : number) => {
 			broadcastRetroParticipants(retro);
 
@@ -172,11 +232,13 @@ const purgeTimedoutParticipants = () : Promise<number> => Promise.all(getAllActi
 			}
 
 			return <Promise<number[]>>Promise.all(Object.entries(retroParticipants)
+				.filter(([k, v]) => !k.endsWith('::avatar'))
 				.map(([id, timestamp]) : Promise<number> => {
 					const timestampDiff : number = (parseInt(timestamp) + SESSION_TIMEOUT_MS) - time();
 					if (timestampDiff <= 0) {
 						console.log(`${redisHashName}->${id} expired ${-timestampDiff}ms ago. Removing key from Redis.`);
-						return redis.hdelAsync(redisHashName, id); // returns number of keys deleted
+						return redis.hdelAsync(redisHashName, `${id}::avatar`)
+							.then(() => redis.hdelAsync(redisHashName, id)); // returns number of keys deleted
 					}
 
 					return Promise.resolve(0);
