@@ -186,7 +186,7 @@ server.on('connection', (socket : WebSocketExtended, req : IncomingMessage) => {
 
 			wsSend(socket, '👋');
 			updateParticipation(socket)
-				.then(() => wsSend(socket, `# Connected to ${Os.hostname()}`))
+				.then(() => wsSend(socket, `CONNECTED_TO ${Os.hostname()}`))
 				.then(() => broadcastRetroParticipants(socket.retro))
 				.catch(console.error);
 		}).then(() =>
