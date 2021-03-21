@@ -6,7 +6,7 @@ RUN npm ci
 COPY . ./
 RUN npm run build
 
-FROM node:14
+FROM node:15
 ENV NODE_ENV='production'
 
 WORKDIR /app
