@@ -1,4 +1,4 @@
-FROM node:14 AS build
+FROM node:17 AS build
 
 WORKDIR /src
 COPY package.json package-lock.json ./
@@ -6,7 +6,7 @@ RUN npm ci
 COPY . ./
 RUN npm run build
 
-FROM node:15
+FROM node:17
 ENV NODE_ENV='production'
 
 WORKDIR /app

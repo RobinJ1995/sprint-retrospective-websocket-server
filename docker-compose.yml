@@ -29,6 +29,7 @@ services:
             REDIS_PUBSUB_TOPIC: 'updates'
             WEBSOCKET_PUBLIC_BASE_URL: 'ws://localhost:5433/'
             PORT: 5432
+            ADMIN_KEY: 'i_am_root'
         depends_on:
             - database
             - redis

@@ -67,16 +67,16 @@ const getSocketsForRetro = (retroId : string) : WebSocketExtended[] =>
 	getClients().filter(({ retro } : WebSocketExtended) => retro === retroId);
 const getNumberOfRetroParticipants = (retroId : string) : Promise<number> =>
 	redis.hgetallAsync(`participants::${retroId}`)
-		.then(participantInfo => participantInfo ? Object.keys(participantInfo) : [])
+		.then(participantInfo => Object.keys(participantInfo || {}))
 		.then(keys => keys.filter(k => !k.endsWith('::avatar')))
-		.then((x : any) => x.length)
+		.then((x : any) => <number>x.length)
 		.catch((err : Error) => {
 			console.warn(`Failed to get participant count for retro ${retroId}`, err);
 			return 0;
 		});
 const getAvatarsForRetroParticipants = (retroId : string) : Promise<string[]> =>
 	redis.hgetallAsync(`participants::${retroId}`)
-		.then(participantInfo => participantInfo ? Object.entries(participantInfo) : <([string, string])[]>{})
+		.then(participantInfo => Object.entries(participantInfo || {}))
 		.then(entries => entries.filter(([k, v]) => k.endsWith('::avatar')).map(([k, v]) => v))
 		.catch((err : Error) => {
 			console.warn(`Failed to get participant avatars for retro ${retroId}`, err);
