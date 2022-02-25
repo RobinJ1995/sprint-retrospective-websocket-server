@@ -11,6 +11,11 @@ const PING_INTERVAL_MS = parseInt(process.env.PING_INTERVAL_MS || String(10_000)
 const SESSION_TIMEOUT_MS : number = parseInt(process.env.SESSION_TIMEOUT_MS || String(PING_INTERVAL_MS * 2));
 
 const AVATARS = ['🙎‍♂️', '🙍🏽‍♂️', '🙍🏼‍♀️', '🙎🏻‍♀️', '👩🏻‍🏭', '👨🏾‍🏭', '🤦‍♂️', '🤦‍♀️', '🙆‍♂️', '🙆🏻‍♀️', '👨‍🎨', '🧟‍♂️', '🧟‍♀️', '🧛‍♂️', '👨‍💻', '👩🏻‍💻', '👨‍💼', '👨🏽‍🍳', '👩🏾‍🍳', '👩🏻‍🍳', '👨🏻‍🔧', '👩🏽‍🔧', '👨‍🌾', '👨🏽‍🎓', '👩🏻‍🎓', '👨‍🚒', '🧖🏻‍♀️', '🧖🏿‍♀️', '🧖🏻‍♂️', '🧖🏾‍♂️', '🕵️‍♂️', '🕵🏻‍♀️', '🙋🏼‍♂️', '🙋🏼‍♀️', '🤹‍♂️', '🤹🏻‍♀️', '🧝🏽‍♂️', '🧝🏻‍♀️', '🤵🏼', '🦸🏻‍♀️', '🧑‍🔬', '🧑‍🎤', '👩‍🎤', '🧑‍🚀', '👩‍🚀', '💂‍♂️', '💂‍♀️', '🧛‍♀️'];
+const SECTIONS = Object.freeze({
+	GOOD: 'good',
+	BAD: 'bad',
+	ACTIONS: 'actions'
+});
 
 import redis from './redis';
 import messageQueue from './message_queue';
@@ -59,6 +64,31 @@ const wsHandle = (socket : WebSocketExtended, message : string) => {
 			.then((nParticipants : number) => wsSend(socket, `PARTICIPANTS ${nParticipants}`));
 		getAvatarsForRetroParticipants(socket.retro)
 			.then((avatars : string[]) => wsSend(socket, `AVATARS ${avatars.join(',')}`));
+	} else if (message.toLowerCase().startsWith('typing ')) {
+		const args : string[] = message.replace(/\n/, '')
+			.split(/\s+/);
+		if (args.length != 3) {
+			console.warn(`Got TYPING message but ${args.length} arguments instead of the expected 3.`, { message });
+			return;
+		}
+		const what = String(args[1]).toLowerCase();
+		const where = String(args[2]).toLowerCase();
+
+		if (!['start', 'stop', 'still'].includes(what)) {
+			console.warn(`Got TYPING message with unexpected action.`, {
+				expected: ['start', 'stop', 'still'],
+				actual: what
+			});
+			return;
+		} else if (!Object.values(SECTIONS).includes(where)) {
+			console.warn(`Got TYPING message with unexpected section.`, {
+				expected: Object.keys(SECTIONS),
+				actual: where
+			});
+			return;
+		}
+
+		broadcastToRetro(socket.retro, `TYPING ${socket.id} ${what} ${where}`, [socket.id]);
 	}
 }
 
@@ -82,8 +112,10 @@ const getAvatarsForRetroParticipants = (retroId : string) : Promise<string[]> =>
 			console.warn(`Failed to get participant avatars for retro ${retroId}`, err);
 			return [];
 		});
-const broadcastToRetro = (retroId: string, message : string) : void =>
-	getSocketsForRetro(retroId).forEach((socket : WebSocketExtended) => wsTrySend(socket, message));
+const broadcastToRetro = (retroId: string, message : string, exceptSocketIds: string[] = []) : void =>
+	getSocketsForRetro(retroId)
+		.filter(socket => !exceptSocketIds.includes(socket.id))
+		.forEach((socket : WebSocketExtended) => wsTrySend(socket, message));
 const getAllActiveRetroIds = () : string[] =>
 	[...getClients()
 		.map(({ retro } : WebSocketExtended) => retro)
