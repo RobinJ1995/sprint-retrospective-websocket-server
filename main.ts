@@ -88,7 +88,7 @@ const wsHandle = (socket : WebSocketExtended, message : string) => {
 			return;
 		}
 
-		broadcastToRetro(socket.retro, `TYPING ${socket.id} ${what} ${where}`, [socket.id]);
+		broadcastToRetro(socket.retro, `TYPING ${socket.avatar} ${what} ${where}`, [socket.id]);
 	}
 }
 
