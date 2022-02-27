@@ -88,7 +88,16 @@ const wsHandle = (socket : WebSocketExtended, message : string) => {
 			return;
 		}
 
-		broadcastToRetro(socket.retro, `TYPING ${socket.avatar} ${what} ${where}`, [socket.id]);
+		messageQueue.send({
+			retro: socket.retro,
+			action: 'TYPING',
+			item: where,
+			value: what,
+			participant: {
+				id: socket.id,
+				avatar: socket.avatar
+			}
+		});
 	}
 }
 
@@ -181,7 +190,15 @@ const findAvailableAvatar = (retroId: string) : Promise<string> => {
 		});
 }
 
-const mqHandle = (message : any) => broadcastToRetro(message.retro, JSON.stringify(message));
+const mqHandle = (message : any) => {
+	if (String(message.action).toUpperCase() === 'TYPING') {
+		return broadcastToRetro(message.retro,
+			`TYPING ${message.participant.avatar} ${message.value} ${message.item}`,
+			[message.participant.id]);
+	}
+
+	return broadcastToRetro(message.retro, JSON.stringify(message));
+}
 messageQueue.onReceive(mqHandle);
 console.info('Message queue handler installed.');
 
