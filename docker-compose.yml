@@ -30,6 +30,7 @@ services:
             WEBSOCKET_PUBLIC_BASE_URL: 'ws://localhost:5433/'
             PORT: 5432
             ADMIN_KEY: 'i_am_root'
+            SUPPRESS_HEALTHCHECK_LOGGING: 'false'
         depends_on:
             - database
             - redis
@@ -46,6 +47,7 @@ services:
             REDIS_PUBSUB_TOPIC: 'updates'
             PORT: 5433
             PING_INTERVAL_MS: 5000
+            SUPPRESS_HEALTHCHECK_LOGGING: 'false'
         depends_on:
             - redis
         restart: always

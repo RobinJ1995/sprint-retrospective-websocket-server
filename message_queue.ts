@@ -11,6 +11,7 @@ console.info(`Connecting to Redis (for pub/sub publisher) at ${REDIS_URL}...`);
 const publisherRedisClient: RedisClientPromisified = <RedisClientPromisified>RedisPromisified.createClient(REDIS_URL);
 
 const REDIS_PUBSUB_TOPIC: string = process.env.REDIS_PUBSUB_TOPIC || 'updates';
+const SUPPRESS_HEALTHCHECK_LOGGING: boolean = (process.env.SUPPRESS_HEALTHCHECK_LOGGING || 'false').toLowerCase() === 'true';
 
 const tryParseJson : any | string = (data: string) => {
 	try {
@@ -40,9 +41,14 @@ class MessageQueue {
 					return;
 				}
 
-				console.log(`>>>>> ${message}`);
+				const isHealthCheckMessage: boolean = String(message).toUpperCase() === '"HEALTH"'; // Double-quoted because we haven't deserialised the JSON yet
+				const suppressLogging: boolean = isHealthCheckMessage && SUPPRESS_HEALTHCHECK_LOGGING;
+
+				if (!suppressLogging) {
+					console.log(`>>>>> ${message}`);
+				}
 				return Promise.resolve(callback(tryParseJson(message)))
-					.then(() => console.log(`>ACK> ${message}`))
+					.then(() => !suppressLogging && console.log(`>ACK> ${message}`))
 			});
 	}
 };
