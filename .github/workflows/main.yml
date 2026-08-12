@@ -8,7 +8,7 @@ jobs:
         steps:
             - uses: actions/checkout@master
             - name: Publish to Github Docker registry
-              uses: elgohr/Publish-Docker-Github-Action@master
+              uses: elgohr/Publish-Docker-Github-Action@v5
               with:
                   name: robinj1995/sprint-retrospective-websocket-server/sprint-retrospective-websocket-server
                   registry: ghcr.io
